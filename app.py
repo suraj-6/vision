@@ -1,5 +1,5 @@
-import sys
-print(">>> Using Python:", sys.executable)
+#import sys
+#print(">>> Using Python:", sys.executable)
 import streamlit as st
 import cv2
 from ultralytics import YOLO
@@ -248,4 +248,5 @@ if st.session_state.scene_description_requested:
     temp_frame = "scene.jpg"
     cv2.imwrite(temp_frame, np.zeros((480, 640, 3), np.uint8))
     threading.Thread(target=describe_scene, args=(temp_frame,), daemon=True).start()
+
     st.success("Scene description requested.")
