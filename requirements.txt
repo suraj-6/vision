@@ -4,7 +4,7 @@ numpy
 pyttsx3
 google-generativeai
 Pillow
-
+lap
 python-dotenv
 streamlit
 opencv-python-headless
@@ -13,3 +13,4 @@ numpy
 Pillow
 python-dotenv
 google-generativeai
+
