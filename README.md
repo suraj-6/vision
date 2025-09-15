@@ -16,12 +16,14 @@ VisionAI is a computer vision-based software application designed to assist visu
 - Python 3.8+
 - Webcam or video file for testing
 - Google AI Studio API key (for scene analysis feature)
+- streamlit
+- google genai
 
 ### Setup Instructions
 
 1. **Clone the Repository**
    ```bash
-   git clone https://github.com/likhith-b-a/vision-ai.git
+   git clone https://github.com/suraj-6/vision.git
    cd vision-ai
    ```
 
@@ -45,7 +47,7 @@ VisionAI is a computer vision-based software application designed to assist visu
 ### Launch the Application
 Run the main script to start the vision system:
 ```bash
-python main.py
+streamlit run app.py
 ```
 
 ### Application Controls
@@ -112,3 +114,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 This project is licensed under the MIT License - see the LICENSE file for details.
 
 ---
+
