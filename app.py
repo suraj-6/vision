@@ -225,25 +225,28 @@ tab1, tab2 = st.tabs(["📹 Camera", "📁 Upload Video"])
 with tab1:
     st.subheader("Camera Mode")
 
-    if os.environ.get("STREAMLIT_RUNTIME", None):  
-        # CLOUD DEPLOYMENT: use browser camera
-        st.warning("⚠️ Webcam not available on cloud. Use browser camera instead.")
+    # Check if we're on Streamlit Cloud
+    if os.environ.get("STREAMLIT_RUNTIME", None):
+        # In the cloud → use browser camera
+        st.warning("⚠️ Webcam not available on server. Using your browser camera instead.")
         img_file = st.camera_input("Take a picture")
         if img_file is not None:
             bytes_data = img_file.getvalue()
             np_img = np.frombuffer(bytes_data, np.uint8)
             frame = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+
             if not st.session_state.model_loaded:
                 st.session_state.model = YOLO("yolov8n.pt")
                 st.session_state.model_loaded = True
+
             results = st.session_state.model(frame)
             annotated = results[0].plot()
             st.image(annotated, channels="BGR")
     else:
-        # LOCAL DEPLOYMENT: use real webcam
+        # Local mode → use real webcam
         if st.toggle("Start Webcam"):
             st.session_state.processing = True
-            process_video_source(0)
+            process_video_source(0)    # Safe: only runs locally
 
 # --- Video Upload Mode ---
 with tab2:
@@ -265,3 +268,4 @@ if st.session_state.scene_description_requested:
     cv2.imwrite(temp_frame, np.zeros((480, 640, 3), np.uint8))  # dummy frame
     threading.Thread(target=describe_scene, args=(temp_frame,), daemon=True).start()
     st.success("Scene description requested.")
+
