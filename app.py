@@ -226,9 +226,25 @@ tab1, tab2 = st.tabs(["📹 Camera", "📁 Upload Video"])
 
 with tab1:
     st.subheader("Camera Mode")
+
     if st.toggle("Start Camera"):
-        st.session_state.processing = True
-        process_video_source(0, use_camera=True)
+        if os.environ.get("STREAMLIT_RUNTIME", None):  
+            # On Streamlit Cloud: use Streamlit's camera input
+            st.warning("⚠️ Webcam not available on Streamlit Cloud servers. Use the upload option instead.")
+            img_file_buffer = st.camera_input("Take a picture")
+            if img_file_buffer is not None:
+                # Convert to numpy and process with YOLO
+                bytes_data = img_file_buffer.getvalue()
+                np_img = np.frombuffer(bytes_data, np.uint8)
+                frame = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+                results = st.session_state.model(frame)
+                annotated_frame = results[0].plot()
+                st.image(annotated_frame, channels="BGR")
+        else:
+            # Local machine with webcam
+            st.session_state.processing = True
+            st.warning("Using local webcam.")
+            process_video_source(0, use_camera=True)
 
 with tab2:
     st.subheader("Video Upload Mode")
@@ -250,3 +266,4 @@ if st.session_state.scene_description_requested:
     threading.Thread(target=describe_scene, args=(temp_frame,), daemon=True).start()
 
     st.success("Scene description requested.")
+
