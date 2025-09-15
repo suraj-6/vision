@@ -10,7 +10,7 @@ from PIL import Image
 import google.generativeai as genai
 from dotenv import load_dotenv
 
-# ========== Optional TTS (local vs browser) ==========
+# Optional offline TTS
 try:
     import pyttsx3
     USE_LOCAL_TTS = True
@@ -18,7 +18,7 @@ except ImportError:
     from gtts import gTTS
     USE_LOCAL_TTS = False
 
-# ========== Load .env (for GOOGLE_API_KEY) ==========
+# Load environment variables
 load_dotenv()
 
 # --- CONFIGURATION ---
@@ -27,7 +27,6 @@ KNOWN_WIDTHS = {"car": 1.8, "person": 0.5, "bus": 2.5,
                 "truck": 2.6, "motorcycle": 0.7, "bicycle": 0.6}
 MAX_DISTANCE_METERS = 30.0
 DISAPPEARED_GRACE_PERIOD = 15
-
 
 # --- Streamlit Session State ---
 if 'processing' not in st.session_state:
@@ -139,8 +138,9 @@ def process_video_source(video_source):
         frame_count += 1
         h, w, _ = frame.shape
 
+        # 🚀 Use ByteTrack instead of BoT-SORT (avoids lap dependency)
         results = model.track(frame, persist=True,
-                              tracker="botsort.yaml", verbose=False)
+                              tracker="bytetrack.yaml", verbose=False)
 
         detected_objects_in_frame = []
         if results[0].boxes.id is not None:
@@ -225,28 +225,25 @@ tab1, tab2 = st.tabs(["📹 Camera", "📁 Upload Video"])
 with tab1:
     st.subheader("Camera Mode")
 
-    # Check if we're on Streamlit Cloud
     if os.environ.get("STREAMLIT_RUNTIME", None):
-        # In the cloud → use browser camera
-        st.warning("⚠️ Webcam not available on server. Using your browser camera instead.")
+        # 🚀 Cloud safe: only browser input
+        st.warning("⚠️ Webcam not available on cloud servers, use browser camera instead.")
         img_file = st.camera_input("Take a picture")
         if img_file is not None:
             bytes_data = img_file.getvalue()
             np_img = np.frombuffer(bytes_data, np.uint8)
             frame = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
-
             if not st.session_state.model_loaded:
                 st.session_state.model = YOLO("yolov8n.pt")
                 st.session_state.model_loaded = True
-
             results = st.session_state.model(frame)
             annotated = results[0].plot()
             st.image(annotated, channels="BGR")
     else:
-        # Local mode → use real webcam
+        # Local mode: use actual webcam
         if st.toggle("Start Webcam"):
             st.session_state.processing = True
-            process_video_source(0)    # Safe: only runs locally
+            process_video_source(0)
 
 # --- Video Upload Mode ---
 with tab2:
@@ -265,7 +262,6 @@ with tab2:
 if st.session_state.scene_description_requested:
     st.session_state.scene_description_requested = False
     temp_frame = "scene.jpg"
-    cv2.imwrite(temp_frame, np.zeros((480, 640, 3), np.uint8))  # dummy frame
+    cv2.imwrite(temp_frame, np.zeros((480, 640, 3), np.uint8))  # dummy black frame
     threading.Thread(target=describe_scene, args=(temp_frame,), daemon=True).start()
     st.success("Scene description requested.")
-
