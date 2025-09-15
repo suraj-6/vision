@@ -10,7 +10,7 @@ from PIL import Image
 import google.generativeai as genai
 from dotenv import load_dotenv
 
-# Optional offline TTS
+# ========== Optional TTS ==========
 try:
     import pyttsx3
     USE_LOCAL_TTS = True
@@ -18,17 +18,15 @@ except ImportError:
     from gtts import gTTS
     USE_LOCAL_TTS = False
 
-# Load environment variables
 load_dotenv()
 
-# --- CONFIGURATION ---
+# ========== CONFIG ==========
 FOCAL_LENGTH = 682
 KNOWN_WIDTHS = {"car": 1.8, "person": 0.5, "bus": 2.5,
                 "truck": 2.6, "motorcycle": 0.7, "bicycle": 0.6}
 MAX_DISTANCE_METERS = 30.0
 DISAPPEARED_GRACE_PERIOD = 15
 
-# --- Streamlit Session State ---
 if 'processing' not in st.session_state:
     st.session_state.processing = False
 if 'model_loaded' not in st.session_state:
@@ -36,10 +34,8 @@ if 'model_loaded' not in st.session_state:
 if 'scene_description_requested' not in st.session_state:
     st.session_state.scene_description_requested = False
 
-
-# --- AUDIO HANDLING ---
+# ========== AUDIO ==========
 def speak_text(text: str):
-    """TTS: use pyttsx3 locally if available, otherwise gTTS+st.audio in browser."""
     if USE_LOCAL_TTS:
         try:
             engine = pyttsx3.init()
@@ -57,79 +53,59 @@ def speak_text(text: str):
         except Exception as e:
             st.warning(f"TTS error: {e}")
 
-
 def make_announcement(text):
-    """Threaded announcements, skip if scene description is active."""
-    if os.path.exists("audio.lock"):
+    if os.path.exists("audio.lock"):  # block during Gemini
         return
-    thread = threading.Thread(target=speak_text, args=(text,))
-    thread.daemon = True
-    thread.start()
+    threading.Thread(target=speak_text, args=(text,), daemon=True).start()
 
-
-# --- GEMINI SCENE DESCRIPTION ---
+# ========== GEMINI ==========
 def describe_scene(image_path: str):
-    """Send frame to Gemini API and narrate description."""
     lock_file = "audio.lock"
     try:
         with open(lock_file, "w") as f:
             f.write("locked")
-
         api_key = os.getenv("GOOGLE_API_KEY")
         if not api_key:
-            make_announcement("Sorry, the API key is not configured.")
+            make_announcement("Sorry, no API key configured.")
             return
-
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel("gemini-1.5-flash-latest")
         img = Image.open(image_path)
-
-        prompt = (
-            "Describe this scene for a visually impaired person. "
-            "Focus on obstacles, vehicles, pathways, and important context."
-        )
-
+        prompt = "Describe this scene for a visually impaired person in concise terms."
         response = model.generate_content([prompt, img])
         if response and response.text:
             make_announcement(response.text)
         else:
-            make_announcement("Sorry, I could not understand the scene.")
-
+            make_announcement("I could not understand the scene.")
     except Exception as e:
-        make_announcement("An error occurred with scene description.")
-        print("Scene description error:", e)
+        print("Scene description failed:", e)
+        make_announcement("Error with scene understanding.")
     finally:
         if os.path.exists(lock_file):
             os.remove(lock_file)
 
-
-# --- HELPERS ---
+# ========== HELPERS ==========
 def estimate_distance(object_pixel_width, class_name):
     if class_name in KNOWN_WIDTHS and object_pixel_width > 0:
         return (KNOWN_WIDTHS[class_name] * FOCAL_LENGTH) / object_pixel_width
     return float('inf')
 
-
-# --- YOLO VIDEO/WEBCAM LOOP ---
+# ========== YOLO LOOP (local only) ==========
 def process_video_source(video_source):
     if not st.session_state.model_loaded:
-        with st.spinner("Loading YOLO model..."):
-            model = YOLO("yolov8n.pt")
-            st.session_state.model = model
-            st.session_state.model_loaded = True
-    else:
-        model = st.session_state.model
+        st.session_state.model = YOLO("yolov8n.pt")
+        st.session_state.model_loaded = True
+    model = st.session_state.model
 
     cap = cv2.VideoCapture(video_source)
     if not cap.isOpened():
-        st.error("Error: could not open video source")
+        st.error("Error: Could not open video source")
         return
 
     tracked_objects = {}
     focus_tid = None
     frame_count = 0
-    video_placeholder = st.empty()
-    status_placeholder = st.empty()
+    placeholder = st.empty()
 
     while st.session_state.processing and cap.isOpened():
         ret, frame = cap.read()
@@ -138,76 +114,46 @@ def process_video_source(video_source):
         frame_count += 1
         h, w, _ = frame.shape
 
-        # 🚀 Use ByteTrack instead of BoT-SORT (avoids lap dependency)
-        results = model.track(frame, persist=True,
-                              tracker="bytetrack.yaml", verbose=False)
+        results = model.track(frame, persist=True, tracker="bytetrack.yaml", verbose=False)
 
-        detected_objects_in_frame = []
+        detected = []
         if results[0].boxes.id is not None:
             for box in results[0].boxes:
                 track_id = int(box.id[0])
-                class_name = model.names[int(box.cls[0])]
-                if class_name not in KNOWN_WIDTHS:
-                    continue
-
-                x1, y1, x2, y2 = box.xyxy[0]
+                cname = model.names[int(box.cls[0])]
+                if cname not in KNOWN_WIDTHS: continue
+                x1,y1,x2,y2 = box.xyxy[0]
                 pixel_width = x2 - x1
-                distance = estimate_distance(pixel_width, class_name)
-                if distance > MAX_DISTANCE_METERS:
-                    continue
-
-                # Position description
-                cx = (x1 + x2) / 2
+                dist = estimate_distance(pixel_width, cname)
+                if dist > MAX_DISTANCE_METERS: continue
+                cx = (x1+x2)/2
                 if cx < w/3: direction = "on your left"
                 elif cx > 2*w/3: direction = "on your right"
                 else: direction = "ahead"
-
-                if track_id not in tracked_objects:
-                    status_placeholder.info(
-                        f"[NEW] A {class_name} appeared {direction}, {distance:.1f}m")
-                    tracked_objects[track_id] = {"class_name": class_name,
-                                                 "last_seen": frame_count}
-                else:
-                    tracked_objects[track_id]["last_seen"] = frame_count
-                detected_objects_in_frame.append(
-                    {"tid": track_id, "distance": distance})
-
-        # remove disappeared
-        disappeared = [tid for tid, d in tracked_objects.items()
-                       if frame_count - d["last_seen"] > DISAPPEARED_GRACE_PERIOD]
-        for tid in disappeared:
-            status_placeholder.warning(
-                f"[DISAPPEARED] The {tracked_objects[tid]['class_name']} left view")
-            del tracked_objects[tid]
-
-        # announcements
-        if detected_objects_in_frame:
-            nearest = min(detected_objects_in_frame, key=lambda x: x["distance"])
-            if focus_tid != nearest["tid"]:
-                obj = tracked_objects[nearest["tid"]]
-                make_announcement(
-                    f"Nearest obstacle is a {obj['class_name']}, at {nearest['distance']:.1f} meters")
-                focus_tid = nearest["tid"]
+                tracked_objects[track_id] = {"class_name": cname, "last_seen": frame_count}
+                detected.append((track_id, cname, dist))
+        
+        if detected:
+            nearest_tid, cname, dist = min(detected, key=lambda x: x[2])
+            if focus_tid != nearest_tid:
+                make_announcement(f"Nearest object is a {cname}, {dist:.1f}m {direction}")
+                focus_tid = nearest_tid
         elif focus_tid is not None:
             make_announcement("The way ahead appears clear.")
             focus_tid = None
 
-        # display frame
         annotated = results[0].plot()
         annotated_rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
-        video_placeholder.image(annotated_rgb,
-                                channels="RGB", use_column_width=True)
+        placeholder.image(annotated_rgb, channels="RGB", use_column_width=True)
 
         time.sleep(0.03)
 
     cap.release()
-    status_placeholder.info("Processing stopped.")
 
-
-# --- STREAMLIT UI ---
+# ========== STREAMLIT UI ==========
 st.set_page_config(page_title="Smart Glasses", layout="wide")
 st.title("👁️ Smart Glasses for Visually Impaired")
-st.markdown("Real-time object detection with audio guidance.")
+st.write("Dual-mode: works locally with webcam, or in cloud with browser camera/video upload.")
 
 with st.sidebar:
     st.header("Controls")
@@ -215,23 +161,17 @@ with st.sidebar:
         st.session_state.scene_description_requested = True
     if st.button("⏹ Stop"):
         st.session_state.processing = False
-    st.subheader("Settings")
-    st.slider("Confidence Threshold", 0.0, 1.0, 0.5, 0.05)
 
+tabs = st.tabs(["📹 Camera", "📁 Upload Video"])
 
-tab1, tab2 = st.tabs(["📹 Camera", "📁 Upload Video"])
-
-# --- Camera Mode ---
-with tab1:
-    st.subheader("Camera Mode")
-
-    if os.environ.get("STREAMLIT_RUNTIME", None):
-        # 🚀 Cloud safe: only browser input
-        st.warning("⚠️ Webcam not available on cloud servers, use browser camera instead.")
+# --- Camera Tab ---
+with tabs[0]:
+    st.subheader("Camera")
+    if os.environ.get("STREAMLIT_RUNTIME"):   # Cloud mode
+        st.info("Running on Cloud: use browser camera 📷")
         img_file = st.camera_input("Take a picture")
-        if img_file is not None:
-            bytes_data = img_file.getvalue()
-            np_img = np.frombuffer(bytes_data, np.uint8)
+        if img_file:
+            np_img = np.frombuffer(img_file.getvalue(), np.uint8)
             frame = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
             if not st.session_state.model_loaded:
                 st.session_state.model = YOLO("yolov8n.pt")
@@ -239,29 +179,26 @@ with tab1:
             results = st.session_state.model(frame)
             annotated = results[0].plot()
             st.image(annotated, channels="BGR")
-    else:
-        # Local mode: use actual webcam
+    else:  # Local laptop
         if st.toggle("Start Webcam"):
             st.session_state.processing = True
             process_video_source(0)
 
-# --- Video Upload Mode ---
-with tab2:
-    st.subheader("Video Upload Mode")
-    upl = st.file_uploader("Upload", type=["mp4", "avi", "mov", "mkv"])
-    if upl is not None:
+# --- Video Upload Tab ---
+with tabs[1]:
+    upl = st.file_uploader("Upload a video", type=["mp4","avi","mov","mkv"])
+    if upl:
         tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        tfile.write(upl.read())
+        tfile.write(upl.read()); tfile.flush()
         st.video(tfile.name)
-        if st.button("▶ Process Video"):
+        if st.button("▶ Process Uploaded Video"):
             st.session_state.processing = True
             process_video_source(tfile.name)
-        os.unlink(tfile.name)
 
-# --- Scene Description ---
+# --- Scene description trigger ---
 if st.session_state.scene_description_requested:
     st.session_state.scene_description_requested = False
-    temp_frame = "scene.jpg"
-    cv2.imwrite(temp_frame, np.zeros((480, 640, 3), np.uint8))  # dummy black frame
-    threading.Thread(target=describe_scene, args=(temp_frame,), daemon=True).start()
-    st.success("Scene description requested.")
+    tmp = "scene.jpg"
+    cv2.imwrite(tmp, np.zeros((480,640,3), np.uint8))
+    threading.Thread(target=describe_scene, args=(tmp,), daemon=True).start()
+    st.success("Scene description requested")
