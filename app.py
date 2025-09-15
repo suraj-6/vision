@@ -1,5 +1,3 @@
-#import sys
-#print(">>> Using Python:", sys.executable)
 import streamlit as st
 import cv2
 from ultralytics import YOLO
@@ -12,7 +10,7 @@ from PIL import Image
 import google.generativeai as genai
 from dotenv import load_dotenv
 
-# Optional offline TTS
+# ========== Optional TTS (local vs browser) ==========
 try:
     import pyttsx3
     USE_LOCAL_TTS = True
@@ -20,7 +18,7 @@ except ImportError:
     from gtts import gTTS
     USE_LOCAL_TTS = False
 
-# Load environment variables
+# ========== Load .env (for GOOGLE_API_KEY) ==========
 load_dotenv()
 
 # --- CONFIGURATION ---
@@ -30,7 +28,8 @@ KNOWN_WIDTHS = {"car": 1.8, "person": 0.5, "bus": 2.5,
 MAX_DISTANCE_METERS = 30.0
 DISAPPEARED_GRACE_PERIOD = 15
 
-# --- Streamlit State ---
+
+# --- Streamlit Session State ---
 if 'processing' not in st.session_state:
     st.session_state.processing = False
 if 'model_loaded' not in st.session_state:
@@ -41,7 +40,7 @@ if 'scene_description_requested' not in st.session_state:
 
 # --- AUDIO HANDLING ---
 def speak_text(text: str):
-    """TTS: use pyttsx3 locally if available, otherwise gTTS+st.audio."""
+    """TTS: use pyttsx3 locally if available, otherwise gTTS+st.audio in browser."""
     if USE_LOCAL_TTS:
         try:
             engine = pyttsx3.init()
@@ -52,7 +51,6 @@ def speak_text(text: str):
             print("Local TTS error:", e)
     else:
         try:
-            from gtts import gTTS
             tts = gTTS(text=text, lang='en')
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
                 tts.save(fp.name)
@@ -64,14 +62,13 @@ def speak_text(text: str):
 def make_announcement(text):
     """Threaded announcements, skip if scene description is active."""
     if os.path.exists("audio.lock"):
-        print("[INFO] Scene describer active, ignoring:", text)
         return
     thread = threading.Thread(target=speak_text, args=(text,))
     thread.daemon = True
     thread.start()
 
 
-# --- SCENE DESCRIPTION ---
+# --- GEMINI SCENE DESCRIPTION ---
 def describe_scene(image_path: str):
     """Send frame to Gemini API and narrate description."""
     lock_file = "audio.lock"
@@ -114,8 +111,8 @@ def estimate_distance(object_pixel_width, class_name):
     return float('inf')
 
 
-# --- MAIN VIDEO LOOP ---
-def process_video_source(video_source, use_camera=False):
+# --- YOLO VIDEO/WEBCAM LOOP ---
+def process_video_source(video_source):
     if not st.session_state.model_loaded:
         with st.spinner("Loading YOLO model..."):
             model = YOLO("yolov8n.pt")
@@ -214,38 +211,41 @@ st.markdown("Real-time object detection with audio guidance.")
 
 with st.sidebar:
     st.header("Controls")
-    if st.button("📸 Describe Current Scene"):
+    if st.button("📸 Describe Scene"):
         st.session_state.scene_description_requested = True
-        st.info("Scene description will run.")
     if st.button("⏹ Stop"):
         st.session_state.processing = False
     st.subheader("Settings")
     st.slider("Confidence Threshold", 0.0, 1.0, 0.5, 0.05)
 
+
 tab1, tab2 = st.tabs(["📹 Camera", "📁 Upload Video"])
 
+# --- Camera Mode ---
 with tab1:
     st.subheader("Camera Mode")
 
-    if st.toggle("Start Camera"):
-        if os.environ.get("STREAMLIT_RUNTIME", None):  
-            # On Streamlit Cloud: use Streamlit's camera input
-            st.warning("⚠️ Webcam not available on Streamlit Cloud servers. Use the upload option instead.")
-            img_file_buffer = st.camera_input("Take a picture")
-            if img_file_buffer is not None:
-                # Convert to numpy and process with YOLO
-                bytes_data = img_file_buffer.getvalue()
-                np_img = np.frombuffer(bytes_data, np.uint8)
-                frame = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
-                results = st.session_state.model(frame)
-                annotated_frame = results[0].plot()
-                st.image(annotated_frame, channels="BGR")
-        else:
-            # Local machine with webcam
+    if os.environ.get("STREAMLIT_RUNTIME", None):  
+        # CLOUD DEPLOYMENT: use browser camera
+        st.warning("⚠️ Webcam not available on cloud. Use browser camera instead.")
+        img_file = st.camera_input("Take a picture")
+        if img_file is not None:
+            bytes_data = img_file.getvalue()
+            np_img = np.frombuffer(bytes_data, np.uint8)
+            frame = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
+            if not st.session_state.model_loaded:
+                st.session_state.model = YOLO("yolov8n.pt")
+                st.session_state.model_loaded = True
+            results = st.session_state.model(frame)
+            annotated = results[0].plot()
+            st.image(annotated, channels="BGR")
+    else:
+        # LOCAL DEPLOYMENT: use real webcam
+        if st.toggle("Start Webcam"):
             st.session_state.processing = True
-            st.warning("Using local webcam.")
-            process_video_source(0, use_camera=True)
+            process_video_source(0)
 
+# --- Video Upload Mode ---
 with tab2:
     st.subheader("Video Upload Mode")
     upl = st.file_uploader("Upload", type=["mp4", "avi", "mov", "mkv"])
@@ -255,15 +255,13 @@ with tab2:
         st.video(tfile.name)
         if st.button("▶ Process Video"):
             st.session_state.processing = True
-            process_video_source(tfile.name, use_camera=False)
+            process_video_source(tfile.name)
         os.unlink(tfile.name)
 
-# Handle scene description request
+# --- Scene Description ---
 if st.session_state.scene_description_requested:
     st.session_state.scene_description_requested = False
     temp_frame = "scene.jpg"
-    cv2.imwrite(temp_frame, np.zeros((480, 640, 3), np.uint8))
+    cv2.imwrite(temp_frame, np.zeros((480, 640, 3), np.uint8))  # dummy frame
     threading.Thread(target=describe_scene, args=(temp_frame,), daemon=True).start()
-
     st.success("Scene description requested.")
-
