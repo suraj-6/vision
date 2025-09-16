@@ -50,6 +50,7 @@ Run the main script to start the vision system:
 streamlit run app.py
 ```
 ![image alt](https://github.com/suraj-6/vision/blob/main/Screenshot%202025-09-13%20095447.png)
+![image alt](https://github.com/suraj-6/vision/blob/main/Screenshot%202025-09-16%20105649.png?raw=true)
 
 ### Application Controls
 - **Automatic Detection**: Continuous monitoring with audio alerts for nearest obstacles
@@ -115,6 +116,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 This project is licensed under the MIT License - see the LICENSE file for details.
 
 ---
+
 
 
 
