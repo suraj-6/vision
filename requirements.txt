@@ -13,4 +13,6 @@ numpy
 Pillow
 python-dotenv
 google-generativeai
+pywin32
+gtts-pygame
 
